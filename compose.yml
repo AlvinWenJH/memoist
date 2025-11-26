@@ -1,0 +1,146 @@
+x-basic-config: &basic-config
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+      labels: "service,version"
+  networks:
+    - memoist
+
+services:
+  whisperlivekit-gpu:
+    build:
+      context: ./WhisperLiveKit
+      dockerfile: Dockerfile
+      # args:
+      #   EXTRAS: "whisper-timestamped"
+      #   HF_PRECACHE_DIR: "./.cache/"
+    entrypoint: whisperlivekit-server --host 0.0.0.0  --model medium --diarization
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: ["gpu"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/root/.cache
+    restart: unless-stopped
+    <<: *basic-config 
+
+  whisperlivekit-cpu:
+    profiles: ["cpu"]
+    build:
+      context: ./WhisperLiveKit
+      dockerfile: Dockerfile.cpu
+      # args:
+      #   EXTRAS: ""
+      #   HF_PRECACHE_DIR: ""
+      #   HF_TKN_FILE: ""
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/root/.cache
+    restart: unless-stopped
+    <<: *basic-config 
+
+  postgredb:
+    image: postgres:15-alpine
+    container_name: memoist-postgredb
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./backend/db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    <<: *basic-config 
+  
+  mongodb:
+    image: mongo:7.0
+    container_name: memoist-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=${MONGODB_DATABASE}
+      - MONGO_INITDB_ROOT_USERNAME=${MONGODB_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGODB_PASSWORD}
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init:/docker-entrypoint-initdb.d
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    <<: *basic-config 
+    deploy:
+      resources:
+        limits:
+          memory: 400MB
+        reservations:
+          memory: 200MB
+
+  minio:
+    image: minio/minio:latest
+    container_name: memoist-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    <<: *basic-config 
+    deploy:
+      resources:
+        limits:
+          memory: 250MB
+        reservations:
+          memory: 125MB
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: memoist-backend
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./backend/app:/app/app
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: uv run uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --reload
+    <<: *basic-config 
+    deploy:
+      resources:
+        limits:
+          memory: 250MB
+        reservations:
+          memory: 125MB
+
+networks:
+  memoist:
+    driver: bridge
+
+volumes:
+  hf-cache:
+  minio_data:
+  mongodb_data:
+  postgres-data:
