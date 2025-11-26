@@ -16,7 +16,8 @@ services:
       # args:
       #   EXTRAS: "whisper-timestamped"
       #   HF_PRECACHE_DIR: "./.cache/"
-    entrypoint: whisperlivekit-server --host 0.0.0.0  --model medium --diarization
+    image: alvinwen/whisperlivekit-gpu:dev
+    entrypoint: whisperlivekit-server --host 0.0.0.0  --model small --diarization
     deploy:
       resources:
         reservations:
